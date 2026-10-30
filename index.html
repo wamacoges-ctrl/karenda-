@@ -165,7 +165,33 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const key=(d)=>y+'-'+pad(m+1)+'-'+pad(d);
 const shown=()=>EVENTS.filter(e=>flt==='all'||e.cat===flt);
+
+function syncStateToUrl(){
+  const p=new URLSearchParams();
+  p.set('ym',y+'-'+pad(m+1));
+  if(sel)p.set('sel',sel);
+  if(flt&&flt!=='all')p.set('flt',flt);
+  const newUrl=location.pathname+(p.toString()?'?'+p.toString():'')+location.hash;
+  history.replaceState(null,'',newUrl);
+}
+
+function restoreStateFromUrl(){
+  const p=new URLSearchParams(location.search);
+  const ym=p.get('ym');
+  if(ym&&/^\d{4}-\d{2}$/.test(ym)){
+    const [y1,m1]=ym.split('-').map(Number);
+    if(m1>=1&&m1<=12){y=y1;m=m1-1;}
+  }
+  const s=p.get('sel');
+  if(s&&/^\d{4}-\d{2}-\d{2}$/.test(s))sel=s;
+  const f=p.get('flt');
+  if(f&&(f==='all'||CATS[f]))flt=f;
+}
+restoreStateFromUrl();
+window.addEventListener('popstate',()=>{restoreStateFromUrl();render();});
+
 function render(){
+  syncStateToUrl();
   $('month').textContent=y+'年'+(m+1)+'月';
   $('chips').innerHTML=[['all','すべて']].concat(Object.entries(CATS)).map(([k,v])=>'<button class="chip" data-f="'+k+'" aria-pressed="'+(flt===k)+'">'+v+'</button>').join('');
   const ev=shown(),first=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate();
@@ -229,13 +255,32 @@ async function api(method,body,tok){
   if(!r.ok){const e=new Error('http');e.status=r.status;throw e}
   return r.json();
 }
-function openDlg(i){
-  editing=i;armed=false;
-  const e=i>=0?EVENTS[i]:{d:sel||key(1),t:'',time:'',place:'',cat:'event',note:''};
-  $('f_d').value=e.d;$('f_t').value=e.t;$('f_time').value=e.time;$('f_place').value=e.place;$('f_cat').value=e.cat;$('f_note').value=e.note;
-  $('del').hidden=i<0;$('del').textContent='削除';$('dlgTitle').textContent=i<0?'予定を追加':'予定を編集';$('err').textContent='';
-  dlg.showModal();
+const DRAFT_KEY='cal_edit_draft';
+function saveDraft(){
+  if(!dlg.open)return;
+  const draft={editing,d:$('f_d').value,t:$('f_t').value,time:$('f_time').value,place:$('f_place').value,cat:$('f_cat').value,note:$('f_note').value};
+  try{sessionStorage.setItem(DRAFT_KEY,JSON.stringify(draft));}catch(e){}
 }
+function clearDraft(){try{sessionStorage.removeItem(DRAFT_KEY);}catch(e){}}
+function restoreDraft(){
+  try{
+    const raw=sessionStorage.getItem(DRAFT_KEY);
+    if(!raw)return;
+    const draft=JSON.parse(raw);
+    openDlg(draft.editing,draft);
+  }catch(e){}
+}
+
+function openDlg(i,draftObj){
+  editing=i;armed=false;
+  const e=draftObj||(i>=0?EVENTS[i]:{d:sel||key(1),t:'',time:'',place:'',cat:'event',note:''});
+  $('f_d').value=e.d||'';$('f_t').value=e.t||'';$('f_time').value=e.time||'';$('f_place').value=e.place||'';$('f_cat').value=e.cat||'event';$('f_note').value=e.note||'';
+  $('del').hidden=i<0;$('del').textContent='削除';$('dlgTitle').textContent=i<0?'予定を追加':'予定を編集';$('err').textContent='';
+  if(!dlg.open)dlg.showModal();
+}
+
+$('f').addEventListener('input',saveDraft);
+$('f').addEventListener('change',saveDraft);
 
 async function save(){
   EVENTS.sort((a,b)=>(a.d+a.time).localeCompare(b.d+b.time));
@@ -254,17 +299,17 @@ async function save(){
 }
 $('add').onclick=()=>openDlg(-1);
 $('list').addEventListener('click',e=>{const b=e.target.closest('.edit');if(b)openDlg(+b.dataset.i)});
-$('cancel').onclick=()=>dlg.close();
+$('cancel').onclick=()=>{clearDraft();dlg.close();};
 $('f').onsubmit=ev=>{
   ev.preventDefault();
   const o={d:$('f_d').value,t:$('f_t').value.trim(),time:$('f_time').value.trim(),place:$('f_place').value.trim(),cat:$('f_cat').value,note:$('f_note').value.trim()};
   if(!o.d||!o.t){$('err').textContent='日付とタイトルを入力してください。';return}
   if(editing>=0)EVENTS[editing]=o;else EVENTS.push(o);
-  dlg.close();save();
+  clearDraft();dlg.close();save();
 };
 $('del').onclick=()=>{
   if(!armed){armed=true;$('del').textContent='もう一度押すと削除';return}
-  EVENTS.splice(editing,1);dlg.close();save();
+  EVENTS.splice(editing,1);clearDraft();dlg.close();save();
 };
 
 function enter(){admin=true;$('adminbar').hidden=false;$('login').hidden=true;render()}
@@ -289,6 +334,7 @@ async function load(){
   try{const r=await fetch('events.json',{cache:'no-cache'});if(r.ok)EVENTS=await r.json()}
   catch(e){$('msg').textContent='予定を読み込めませんでした。通信を確認してください。'}
   render();
+  restoreDraft();
 }
 render();load();
 $('login').hidden=false;
